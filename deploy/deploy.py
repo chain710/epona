@@ -7,23 +7,27 @@ from fabric.api import local, run, env, put, sudo, lcd, cd
 from ConfigParser import SafeConfigParser
 
 
-def deploy_dir(local_dir, remote_dir):
+def deploy_dir(local_dir, conf):
     for root,dirs,files in os.walk(local_dir):
         for file in files:
             if file.startswith('_'):
                 continue
             deploy_file = os.sep.join([root, file])
             result = put(local_path=deploy_file, 
-                remote_path=remote_dir, 
+                remote_path=conf['remote_dir'], 
                 use_sudo=False, 
                 mirror_local_mode=True)
             if (len(result.failed) > 0):
                 for i in result.failed:
                     print "transfer failed: %s"%(i)
+                    
+    if None != conf['post_process']:
+        run(conf['post_process'])
 
 def load_deploy_conf(conf_file):
     remote_dir = "~"
-    conf_reader = SafeConfigParser({'password':None, 'user':None, 'remote_dir':None})
+    post_process = None
+    conf_reader = SafeConfigParser({'password':None, 'user':None, 'remote_dir':None, 'post_process':None})
     try:
         conf_reader.read(conf_file)
     except Exception, e:
@@ -34,6 +38,7 @@ def load_deploy_conf(conf_file):
         def_pwd = conf_reader.get("_def", "password")
         def_usr = conf_reader.get("_def", "user")
         remote_dir = conf_reader.get("_def", "remote_dir")
+        post_process = conf_reader.get("_def", "post_process")
         env.password = def_pwd
         env.user = def_usr
     else:
@@ -52,7 +57,7 @@ def load_deploy_conf(conf_file):
         if None != host_pwd:
             env.passwords[host] = host_pwd
 
-    return remote_dir
+    return {'remote_dir':remote_dir, 'post_process':post_process}
     
 def deploy():
     rootpath = "."
@@ -63,14 +68,14 @@ def deploy():
                 continue
             
             deploy_path = dir
-            remote_dir = load_deploy_conf(os.sep.join([deploy_path, "_conf"]))
-            if None == remote_dir:
-                sys.stderr.write("find no remote dir in %s"%(deploy_path))
+            conf = load_deploy_conf(os.sep.join([deploy_path, "_conf"]))
+            if None == conf:
+                sys.stderr.write("load conf err under %s"%(deploy_path))
                 continue
             
             for host_str in env.hosts:
                 env.host_string = host_str
-                deploy_dir(deploy_path, remote_dir)
+                deploy_dir(deploy_path, conf)
             
 if __name__ == '__main__':
     deploy()

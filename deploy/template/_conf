@@ -1,8 +1,6 @@
 [_def]
 remote_dir=/tmp
 password=321312
+#post_process=cd /tmp; ls -lhrt
 
 [root@192.168.0.221]
-
-[root@192.168.0.173]
-password=123123
