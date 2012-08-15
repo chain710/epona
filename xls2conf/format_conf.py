@@ -4,29 +4,15 @@ import codecs
 
 class format_conf:
     type = "line"
-    xml_prefix = None
-    ini_prefix = None
-    output_forbid = ""
-    
-    def is_allowed(self, ftype):
-        if (None == self.output_forbid):
-            return True
-        for i in self.output_forbid.split(','):
-            if i == ftype:
-                return False
-        return True
+    out_confs = {}
     
 def load_format_conf(sheet):
     ret = format_conf()
     for cells in sheet.rows:
         if cells[0].value == 'type':
             ret.type = cells[1].value
-        elif cells[0].value == 'xml_prefix':
-            ret.xml_prefix = cells[1].value
-        elif cells[0].value == 'ini_prefix':
-            ret.ini_prefix = cells[1].value
-        elif cells[0].value == 'output_forbid':
-            ret.output_forbid = cells[1].value
+        elif cells[0].value.startswith('outconf_') and cells[1].value != None:
+            ret.out_confs['_'.join(cells[0].value.split('_')[1:])] = cells[1].value
     return ret
 
 def node_desc(name):
@@ -42,22 +28,16 @@ def filename_prefix(name):
         return node_desc(name)
     else:
         return node_desc(name[pos+1:])
-
-def is_xml_node(name):
-    if (name.find('.o_xml') >= 0):
-        return True
-    elif (name.find('.o_') < 0):
-        return True
-    else:
-        return False
-
-def is_ini_node(name):
-    if (name.find('.o_ini') >= 0):
-        return True
-    elif (name.find('.o_') < 0):
-        return True
-    else:
-        return False
+        
+def is_conf_node(name, fcode):
+    opts = name.split('.')
+    has_out_spec = False
+    for i in opts:
+        if 'o_%s'%(fcode) == i:
+            return True
+        if i.startswith('o_'):
+            has_out_spec = True
+    return not has_out_spec
         
 def cell_value(c):
     if (c.is_date()):
@@ -68,14 +48,14 @@ def cell_value(c):
 def xml_entry(c, d):
     return u"<%s>%s</%s>"%(d, c, d)
         
-def to_xml_row_str(desc, row):
+def to_xml_row_str(desc, row, fcode):
     return "<%s>\n%s\n</%s>"%(
         'man', 
-        '\n'.join([xml_entry(cell_value(row[i]), node_desc(desc[i].value)) for i in range(0,len(row)) if is_xml_node(desc[i].value)]), 
+        '\n'.join([xml_entry(cell_value(row[i]), node_desc(desc[i].value)) for i in range(0,len(row)) if is_conf_node(desc[i].value, fcode)]), 
         'man')
 
-def to_ini_row_str(desc, row):
-    return '  '.join([cell_value(row[i]) for i in range(0,len(row)) if is_ini_node(desc[i].value)])
+def to_ini_row_str(desc, row, fcode):
+    return '  '.join([cell_value(row[i]) for i in range(0,len(row)) if is_conf_node(desc[i].value, fcode)])
 
 def output_xml(filename, data):
     f = codecs.open(filename, "w", "utf-8")
@@ -88,33 +68,30 @@ def output_ini(filename, data):
     f.write(data)
     f.close()
 
-def xml_filename(fconf, filename, title):
-    if (None == fconf or None == fconf.xml_prefix):
-        return "%s.%s.xml"%(filename_prefix(filename), title)
-    else:
-        return "%s.%s.xml"%(fconf.xml_prefix, title)
-        
-def ini_filename(fconf, filename, title):
-    if (None == fconf or None == fconf.ini_prefix):
-        return "%s.%s.ini"%(filename_prefix(filename), title)
-    else:
-        return "%s.%s.ini"%(fconf.ini_prefix, title)
-
-def ini_description(desc):
-    return '#'+'  '.join([node_desc(i.value) for i in desc if is_ini_node(i.value)])
+def ini_description(desc, fcode):
+    return '#'+'  '.join([node_desc(i.value) for i in desc if is_conf_node(i.value, fcode)])
 
 def format_one_sheet(filename, fconf, sheet):
     print "now process sheet %s"%(sheet.title)
     # row 0 must be comment
     sheet_desc = sheet.rows[0]
-    #output xml & ini files
-    if (fconf != None and fconf.is_allowed('xml')):
-        xmlout = "<conf>\n%s\n</conf>"%('\n'.join([to_xml_row_str(sheet_desc, i) for i in sheet.rows[1:]]))
-        output_xml(xml_filename(fconf, filename, sheet.title), xmlout)
-    if (fconf != None and fconf.is_allowed('ini')):
-        print ini_filename(fconf, filename, sheet.title)
-        iniout = "%s\n%s"%(ini_description(sheet_desc), '\n'.join([to_ini_row_str(sheet_desc, i) for i in sheet.rows[1:]]))
-        output_ini(ini_filename(fconf, filename, sheet.title), iniout)
+    
+    #output conf files
+    if (fconf == None):
+        return
+        
+    for fcode in fconf.out_confs:
+        confname = fconf.out_confs[fcode]
+        file_ext = os.path.splitext(confname)[1]
+        print file_ext
+        if file_ext == ".xml":
+            print confname
+            xmlout = "<conf>\n%s\n</conf>"%('\n'.join([to_xml_row_str(sheet_desc, i, fcode) for i in sheet.rows[1:]]))
+            output_xml(confname, xmlout)
+        elif file_ext == ".ini":
+            print confname
+            iniout = "%s\n%s"%(ini_description(sheet_desc, fcode), '\n'.join([to_ini_row_str(sheet_desc, i, fcode) for i in sheet.rows[1:]]))
+            output_ini(confname, iniout)
 
 def format_one_conf(filename):
     wb = load_workbook(filename = filename)
@@ -124,7 +101,7 @@ def format_one_conf(filename):
             fconf = load_format_conf(wb.get_sheet_by_name(i))
             
     for i in wb.get_sheet_names():
-        if i.find("_") != 0:
+        if i == "_output":
             format_one_sheet(filename, fconf, wb.get_sheet_by_name(i))
 
 if __name__ == '__main__':
