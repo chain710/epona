@@ -3,8 +3,9 @@ import os, fnmatch
 import codecs
 
 class format_conf:
-    type = "line"
-    out_confs = {}
+    def __init__(self):
+        self.type = "line"
+        self.out_confs = {}
     
 def load_format_conf(sheet):
     ret = format_conf()
@@ -72,7 +73,6 @@ def ini_description(desc, fcode):
     return '#'+'  '.join([node_desc(i.value) for i in desc if is_conf_node(i.value, fcode)])
 
 def format_one_sheet(filename, fconf, sheet):
-    print "now process sheet %s"%(sheet.title)
     # row 0 must be comment
     sheet_desc = sheet.rows[0]
     
@@ -83,23 +83,23 @@ def format_one_sheet(filename, fconf, sheet):
     for fcode in fconf.out_confs:
         confname = fconf.out_confs[fcode]
         file_ext = os.path.splitext(confname)[1]
-        print file_ext
         if file_ext == ".xml":
-            print confname
             xmlout = "<conf>\n%s\n</conf>"%('\n'.join([to_xml_row_str(sheet_desc, i, fcode) for i in sheet.rows[1:]]))
             output_xml(confname, xmlout)
+            print "output xml %s"%(confname)
         elif file_ext == ".ini":
-            print confname
             iniout = "%s\n%s"%(ini_description(sheet_desc, fcode), '\n'.join([to_ini_row_str(sheet_desc, i, fcode) for i in sheet.rows[1:]]))
             output_ini(confname, iniout)
+            print "output ini %s"%(confname)
 
 def format_one_conf(filename):
     wb = load_workbook(filename = filename)
     fconf = None
+    print "now process xlsx file %s"%(filename)
     for i in wb.get_sheet_names():
         if i == "_conf":
             fconf = load_format_conf(wb.get_sheet_by_name(i))
-            
+
     for i in wb.get_sheet_names():
         if i == "_output":
             format_one_sheet(filename, fconf, wb.get_sheet_by_name(i))
