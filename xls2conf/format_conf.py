@@ -13,23 +13,12 @@ def load_format_conf(sheet):
         if cells[0].value == 'type':
             ret.type = cells[1].value
         elif cells[0].value.startswith('outconf_') and cells[1].value != None:
-            ret.out_confs['_'.join(cells[0].value.split('_')[1:])] = cells[1].value
+            ret.out_confs[cells[0].value.split('_', 1)[1]] = cells[1].value
     return ret
 
 def node_desc(name):
-    pos = name.find('.')
-    if pos > 0:
-        return name[:pos]
-    else:
-        return name
-        
-def filename_prefix(name):
-    pos = name.rfind('/')
-    if pos < 0:
-        return node_desc(name)
-    else:
-        return node_desc(name[pos+1:])
-        
+    return name.split('.', 1)[0]
+    
 def is_conf_node(name, fcode):
     opts = name.split('.')
     has_out_spec = False
@@ -57,14 +46,8 @@ def to_xml_row_str(desc, row, fcode):
 
 def to_ini_row_str(desc, row, fcode):
     return '  '.join([cell_value(row[i]) for i in range(0,len(row)) if is_conf_node(desc[i].value, fcode)])
-
-def output_xml(filename, data):
-    f = codecs.open(filename, "w", "utf-8")
-    f.write(u"<?xml version='1.0' encoding='UTF-8' standalone='yes'?>\n")
-    f.write(data)
-    f.close()
     
-def output_ini(filename, data):
+def save_conf_file(filename, data):
     f = codecs.open(filename, "w", "utf-8")
     f.write(data)
     f.close()
@@ -72,6 +55,62 @@ def output_ini(filename, data):
 def ini_description(desc, fcode):
     return '#'+'  '.join([node_desc(i.value) for i in desc if is_conf_node(i.value, fcode)])
 
+def inf_to_ini(rows, fcode):
+    inf_str = ''
+    for row in rows:
+        if len(row) < 2:
+            continue
+        k = cell_value(row[0])
+        v = cell_value(row[1])
+        
+        if row[1].value == None:
+            inf_str += "[%s]\n"%(k)
+        elif is_conf_node(k, fcode):
+            inf_str += "%s=%s\n"%(node_desc(k), v)
+    return inf_str
+    
+def inf_to_xml(rows, fcode):
+    inf_str = '<conf>\n'
+    last_sec = None
+    for row in rows:
+        if len(row) < 2:
+            continue
+        k = cell_value(row[0])
+        v = cell_value(row[1])
+        
+        if row[1].value == None:
+            if None == last_sec:
+                inf_str += "<%s>\n"%(k)
+            elif is_conf_node(k, fcode):
+                inf_str += "</%s>\n<%s>\n"%(last_sec, k)
+            last_sec = k
+        else:
+            inf_str += "<%s>%s</%s>\n"%(node_desc(k), v, node_desc(k))
+    if last_sec != None:
+        inf_str += "</%s>\n"%(last_sec)
+    inf_str += "</conf>"
+    return inf_str
+    
+def generate_conf_text(file_ext, conf_type, fcode, rows):
+    if file_ext == ".xml":
+        if conf_type == "inf":
+            xmlout = inf_to_xml(rows, fcode)
+        else:
+            xmlout = "<conf>\n%s\n</conf>"%('\n'.join([to_xml_row_str(rows[0], i, fcode) for i in rows[1:]]))
+        #output_xml(confname, xmlout)
+        xmlout = u"<?xml version='1.0' encoding='UTF-8' standalone='yes'?>\n" + xmlout
+        return xmlout
+    elif file_ext == ".ini":
+        if conf_type == "inf":
+            iniout = inf_to_ini(rows, fcode)
+        else:
+            iniout = "%s\n%s"%(ini_description(rows[0], fcode), '\n'.join([to_ini_row_str(rows[0], i, fcode) for i in rows[1:]]))
+        #output_ini(confname, iniout)
+        return iniout
+    else:
+        print "unknown file ext %s"%(file_ext)
+        return ""
+        
 def format_one_sheet(filename, fconf, sheet):
     # row 0 must be comment
     sheet_desc = sheet.rows[0]
@@ -79,18 +118,12 @@ def format_one_sheet(filename, fconf, sheet):
     #output conf files
     if (fconf == None):
         return
-        
+
     for fcode in fconf.out_confs:
         confname = fconf.out_confs[fcode]
         file_ext = os.path.splitext(confname)[1]
-        if file_ext == ".xml":
-            xmlout = "<conf>\n%s\n</conf>"%('\n'.join([to_xml_row_str(sheet_desc, i, fcode) for i in sheet.rows[1:]]))
-            output_xml(confname, xmlout)
-            print "output xml %s"%(confname)
-        elif file_ext == ".ini":
-            iniout = "%s\n%s"%(ini_description(sheet_desc, fcode), '\n'.join([to_ini_row_str(sheet_desc, i, fcode) for i in sheet.rows[1:]]))
-            output_ini(confname, iniout)
-            print "output ini %s"%(confname)
+        save_conf_file(confname, generate_conf_text(file_ext, fconf.type, fcode, sheet.rows))
+
 
 def format_one_conf(filename):
     wb = load_workbook(filename = filename)
