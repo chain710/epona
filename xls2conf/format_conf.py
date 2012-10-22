@@ -84,7 +84,7 @@ def inf_to_xml(rows, fcode):
             elif is_conf_node(k, fcode):
                 inf_str += "</%s>\n<%s>\n"%(last_sec, k)
             last_sec = k
-        else:
+        elif is_conf_node(k, fcode):
             inf_str += "<%s>%s</%s>\n"%(node_desc(k), v, node_desc(k))
     if last_sec != None:
         inf_str += "</%s>\n"%(last_sec)
