@@ -8,6 +8,9 @@ from ConfigParser import SafeConfigParser
 
 
 def deploy_dir(local_dir, conf):
+    if None != conf['pre_process']:
+        run(conf['pre_process'])
+        
     for root,dirs,files in os.walk(local_dir):
         for file in files:
             if file.startswith('_'):
@@ -16,7 +19,7 @@ def deploy_dir(local_dir, conf):
             result = put(local_path=deploy_file, 
                 remote_path=conf['remote_dir'], 
                 use_sudo=False, 
-                mirror_local_mode=True)
+                mirror_local_mode=False)
             if (len(result.failed) > 0):
                 for i in result.failed:
                     print "transfer failed: %s"%(i)
@@ -24,9 +27,16 @@ def deploy_dir(local_dir, conf):
     if None != conf['post_process']:
         run(conf['post_process'])
 
+def config_get(conf, section, option, default):
+    if conf.has_option(section, option):
+        return conf.get(section, option)
+    else:
+        return default
+        
 def load_deploy_conf(conf_file):
     remote_dir = "~"
     post_process = None
+    pre_process = None
     conf_reader = SafeConfigParser({'password':None, 'user':None, 'remote_dir':None, 'post_process':None})
     try:
         conf_reader.read(conf_file)
@@ -35,10 +45,11 @@ def load_deploy_conf(conf_file):
         return None
     # check def conf
     if conf_reader.has_section('_def'):
-        def_pwd = conf_reader.get("_def", "password")
-        def_usr = conf_reader.get("_def", "user")
-        remote_dir = conf_reader.get("_def", "remote_dir")
-        post_process = conf_reader.get("_def", "post_process")
+        def_pwd = config_get(conf_reader, "_def", "password", "")
+        def_usr = config_get(conf_reader, "_def", "user", "root")
+        remote_dir = config_get(conf_reader, "_def", "remote_dir", "/tmp")
+        post_process = config_get(conf_reader, "_def", "post_process", None)
+        pre_process = config_get(conf_reader, "_def", "pre_process", None)
         env.password = def_pwd
         env.user = def_usr
     else:
@@ -57,7 +68,7 @@ def load_deploy_conf(conf_file):
         if None != host_pwd:
             env.passwords[host] = host_pwd
 
-    return {'remote_dir':remote_dir, 'post_process':post_process}
+    return {'remote_dir':remote_dir, 'post_process':post_process, 'pre_process': pre_process}
     
 def deploy():
     rootpath = "."
