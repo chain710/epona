@@ -70,11 +70,14 @@ def load_deploy_conf(conf_file):
 
     return {'remote_dir':remote_dir, 'post_process':post_process, 'pre_process': pre_process}
     
-def deploy():
+def deploy(deploy_name = None):
     rootpath = "."
     for root,dirs,files in os.walk(rootpath):
         for dir in dirs:
             # process file under root only
+            if (deploy_name != None and dir != deploy_name):
+                continue
+            
             if (rootpath != root or dir.startswith('_')):
                 continue
             
@@ -89,4 +92,7 @@ def deploy():
                 deploy_dir(deploy_path, conf)
             
 if __name__ == '__main__':
-    deploy()
+    deploy_name = None
+    if (len(sys.argv) > 1):
+        deploy_name = sys.argv[1]
+    deploy(deploy_name)

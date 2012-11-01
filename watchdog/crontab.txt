@@ -1,0 +1,2 @@
+#process monitor
+*/5 * * * * /usr/local/monitor/monitor.sh >/dev/null 2>&1
