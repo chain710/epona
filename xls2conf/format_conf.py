@@ -1,6 +1,7 @@
 from openpyxl import load_workbook
 import os, fnmatch
 import codecs
+from sets import Set
 
 class format_conf:
     def __init__(self):
@@ -17,7 +18,8 @@ def load_format_conf(sheet):
     return ret
 
 def node_desc(name):
-    return name.split('.', 1)[0]
+    return unicode(name).split('.', 1)[0]
+    
     
 def is_conf_node(name, fcode):
     opts = name.split('.')
@@ -27,6 +29,7 @@ def is_conf_node(name, fcode):
             return True
         if i.startswith('o_'):
             has_out_spec = True
+            
     return not has_out_spec
         
 def cell_value(c):
@@ -38,14 +41,15 @@ def cell_value(c):
 def xml_entry(c, d):
     return u"<%s>%s</%s>"%(d, c, d)
         
-def to_xml_row_str(desc, row, fcode):
+def to_xml_row_str(desc, row, fcode, col_masks):
     return "<%s>\n%s\n</%s>"%(
         'man', 
-        '\n'.join([xml_entry(cell_value(row[i]), node_desc(desc[i].value)) for i in range(0,len(row)) if is_conf_node(desc[i].value, fcode)]), 
+        '\n'.join([xml_entry(cell_value(row[i]), node_desc(desc[i].value)) 
+            for i in range(0,len(row)) if node_desc(desc[i].value) in col_masks and is_conf_node(desc[i].value, fcode)]), 
         'man')
 
-def to_ini_row_str(desc, row, fcode):
-    return '  '.join([cell_value(row[i]) for i in range(0,len(row)) if is_conf_node(desc[i].value, fcode)])
+def to_ini_row_str(desc, row, fcode, col_masks):
+    return '  '.join([cell_value(row[i]) for i in range(0,len(row)) if node_desc(desc[i].value) in col_masks and is_conf_node(desc[i].value, fcode)])
     
 def save_conf_file(filename, data):
     f = codecs.open(filename, "w", "utf-8")
@@ -70,7 +74,7 @@ def inf_to_ini(rows, fcode):
     return inf_str
     
 def inf_to_xml(rows, fcode):
-    inf_str = '<conf>\n'
+    inf_str = ''
     last_sec = None
     for row in rows:
         if len(row) < 2:
@@ -88,57 +92,60 @@ def inf_to_xml(rows, fcode):
             inf_str += "<%s>%s</%s>\n"%(node_desc(k), v, node_desc(k))
     if last_sec != None:
         inf_str += "</%s>\n"%(last_sec)
-    inf_str += "</conf>"
     return inf_str
     
-def generate_conf_text(file_ext, conf_type, fcode, rows):
+def generate_conf_text(file_ext, conf_type, fcode, rows, col_masks):
     if file_ext == ".xml":
         if conf_type == "inf":
             xmlout = inf_to_xml(rows, fcode)
         else:
-            xmlout = "<conf>\n%s\n</conf>"%('\n'.join([to_xml_row_str(rows[0], i, fcode) for i in rows[1:]]))
-        #output_xml(confname, xmlout)
-        xmlout = u"<?xml version='1.0' encoding='UTF-8' standalone='yes'?>\n" + xmlout
+            xmlout = "%s\n"%('\n'.join([to_xml_row_str(rows[0], i, fcode, col_masks) for i in rows[1:]]))
         return xmlout
     elif file_ext == ".ini":
         if conf_type == "inf":
             iniout = inf_to_ini(rows, fcode)
         else:
-            iniout = "%s\n%s"%(ini_description(rows[0], fcode), '\n'.join([to_ini_row_str(rows[0], i, fcode) for i in rows[1:]]))
+            iniout = "%s\n"%('\n'.join([to_ini_row_str(rows[0], i, fcode, col_masks) for i in rows[1:]]))
         #output_ini(confname, iniout)
         return iniout
     else:
         print "unknown file ext %s"%(file_ext)
         return ""
-        
-def format_one_sheet(filename, fconf, sheet):
-    # row 0 must be comment
-    sheet_desc = sheet.rows[0]
-    
-    #output conf files
-    if (fconf == None):
-        return
-
-    for fcode in fconf.out_confs:
-        confname = fconf.out_confs[fcode]
-        file_ext = os.path.splitext(confname)[1]
-        save_conf_file(confname, generate_conf_text(file_ext, fconf.type, fcode, sheet.rows))
-
 
 def format_one_conf(filename):
     wb = load_workbook(filename = filename)
     fconf = None
     print "now process xlsx file %s"%(filename)
+    fconf = load_format_conf(wb.get_sheet_by_name("_conf"))
+    col_masks = None
+    def_sheet = None
+    if fconf.type == "line":
+        # get default sheet
+        def_sheet = wb.get_sheet_by_name("_output")
+        col_masks = Set([node_desc(i.value) for i in def_sheet.rows[0]])
+    
+    outconf_content = {}
     for i in wb.get_sheet_names():
-        if i == "_conf":
-            fconf = load_format_conf(wb.get_sheet_by_name(i))
+        sheet = wb.get_sheet_by_name(i)
+        if i.startswith("_output"):
+            for fcode in fconf.out_confs:
+                confname = fconf.out_confs[fcode]
+                file_ext = os.path.splitext(confname)[1]
+                if not outconf_content.has_key(confname):
+                    outconf_content[confname] = ""
+                outconf_content[confname] += generate_conf_text(file_ext, fconf.type, fcode, sheet.rows, col_masks)
 
-    for i in wb.get_sheet_names():
-        if i == "_output":
-            format_one_sheet(filename, fconf, wb.get_sheet_by_name(i))
+    for fcode in fconf.out_confs:
+        confname = fconf.out_confs[fcode]
+        file_ext = os.path.splitext(confname)[1]
+        if file_ext == ".xml":
+            outconf_content[confname] = u"<?xml version='1.0' encoding='UTF-8' standalone='yes'?><conf>\n%s\n</conf>\n"%(outconf_content[confname])
+        elif file_ext == ".ini" and fconf.type == "line":
+            outconf_content[confname] = u"%s\n%s"%(ini_description(def_sheet.rows[0], fcode), outconf_content[confname])
+        save_conf_file(confname, outconf_content[confname])
 
 if __name__ == '__main__':
-    rootpath = "./"
+    rootpath = "."
     excel_pat = "*.xlsx"
     for root,dirs,files in os.walk(rootpath):
         for filespath in files:
