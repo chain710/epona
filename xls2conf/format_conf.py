@@ -2,8 +2,6 @@ from openpyxl import load_workbook
 import os, fnmatch
 import codecs
 from sets import Set
-import logging
-import sys
 
 class format_conf:
     def __init__(self):
@@ -42,28 +40,16 @@ def cell_value(c):
         
 def xml_entry(c, d):
     return u"<%s>%s</%s>"%(d, c, d)
-
-    
-def max_column(row):
-    #fix for excel 2010
-    max_col = len(row)
-    for i in range(0,len(row)):
-        if row[i].value is None:
-            max_col = i
-            break
-    return max_col
-
+        
 def to_xml_row_str(desc, row, fcode, col_masks):
-    max_col = max_column(desc)
     return "<%s>\n%s\n</%s>"%(
         'man', 
         '\n'.join([xml_entry(cell_value(row[i]), node_desc(desc[i].value)) 
-            for i in range(0,max_col) if node_desc(desc[i].value) in col_masks and is_conf_node(desc[i].value, fcode)]), 
+            for i in range(0,len(row)) if node_desc(desc[i].value) in col_masks and is_conf_node(desc[i].value, fcode)]), 
         'man')
 
 def to_ini_row_str(desc, row, fcode, col_masks):
-    max_col = max_column(desc)
-    return '  '.join([cell_value(row[i]) for i in range(0,max_col) if node_desc(desc[i].value) in col_masks and is_conf_node(desc[i].value, fcode)])
+    return '  '.join([cell_value(row[i]) for i in range(0,len(row)) if node_desc(desc[i].value) in col_masks and is_conf_node(desc[i].value, fcode)])
     
 def save_conf_file(filename, data):
     f = codecs.open(filename, "w", "utf-8")
@@ -71,10 +57,7 @@ def save_conf_file(filename, data):
     f.close()
 
 def ini_description(desc, fcode):
-    max_col = max_column(desc)
-    logging.debug(desc)
-    logging.debug("max_col=%d fcode=%s"%(max_col,fcode))
-    return '#'+'  '.join([node_desc(desc[i].value) for i in range(0,max_col) if is_conf_node(desc[i].value, fcode)])
+    return '#'+'  '.join([node_desc(i.value) for i in desc if is_conf_node(i.value, fcode)])
 
 def inf_to_ini(rows, fcode):
     inf_str = ''
@@ -126,13 +109,13 @@ def generate_conf_text(file_ext, conf_type, fcode, rows, col_masks):
         #output_ini(confname, iniout)
         return iniout
     else:
-        logging.error("unknown file ext %s"%(file_ext))
+        print "unknown file ext %s"%(file_ext)
         return ""
 
 def format_one_conf(filename):
     wb = load_workbook(filename = filename)
     fconf = None
-    logging.info("now process xlsx file %s"%(filename))
+    print "now process xlsx file %s"%(filename)
     fconf = load_format_conf(wb.get_sheet_by_name("_conf"))
     col_masks = None
     def_sheet = None
@@ -150,7 +133,6 @@ def format_one_conf(filename):
                 file_ext = os.path.splitext(confname)[1]
                 if not outconf_content.has_key(confname):
                     outconf_content[confname] = ""
-                logging.debug("sheet %s get_highest_colum=%d column_dimensions=%d"%(i, sheet.get_highest_column(), len(sheet.column_dimensions)))
                 outconf_content[confname] += generate_conf_text(file_ext, fconf.type, fcode, sheet.rows, col_masks)
 
     for fcode in fconf.out_confs:
@@ -163,10 +145,6 @@ def format_one_conf(filename):
         save_conf_file(confname, outconf_content[confname])
 
 if __name__ == '__main__':
-    my_dir = os.path.dirname(os.path.abspath(__file__))
-    procname = os.path.basename(sys.argv[0])
-    logging.basicConfig(format='%(asctime)s|%(message)s', level=logging.INFO, datefmt='%Y-%m-%d %H:%M:%S')
-    
     rootpath = "."
     excel_pat = "*.xlsx"
     for root,dirs,files in os.walk(rootpath):
