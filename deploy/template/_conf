@@ -1,6 +1,13 @@
 [_def]
-remote_dir=/tmp
-password=321312
-#post_process=cd /tmp; ls -lhrt
+remote_dir=/tmp/
+password=gameissofunny
+post_process=cd /tmp; ls -lhrt | tail
 
-[root@192.168.0.221]
+[root@192.168.0.147]
+
+[game2]
+sudo_prefix=sudo /bin/su - nobody
+sudo=yes
+host=root@192.168.0.147
+remote_dir=/data/linux-component/
+post_process=cd /data; ls -lhrt | tail

@@ -3,72 +3,80 @@
 
 import os, sys
 from datetime import datetime
+import fabric
 from fabric.api import local, run, env, put, sudo, lcd, cd
+from fabric.contrib.project import upload_project
+from fabric.context_managers import settings
 from ConfigParser import SafeConfigParser
 
+def run_remote(cmdline, use_sudo):
+    if use_sudo:
+        sudo(cmdline)
+    else:
+        run(cmdline)
 
-def deploy_dir(local_dir, conf):
-    if None != conf['pre_process']:
-        run(conf['pre_process'])
-        
-    for root,dirs,files in os.walk(local_dir):
-        for file in files:
-            if file.startswith('_'):
-                continue
-            deploy_file = os.sep.join([root, file])
-            result = put(local_path=deploy_file, 
-                remote_path=conf['remote_dir'], 
-                use_sudo=False, 
-                mirror_local_mode=False)
-            if (len(result.failed) > 0):
-                for i in result.failed:
-                    print "transfer failed: %s"%(i)
-                    
-    if None != conf['post_process']:
-        run(conf['post_process'])
+def deploy_dir(local_dir, conf, pack_name):
+    sprefix=conf['sudo_prefix']
+    if sprefix is None:
+        sprefix = env.sudo_prefix
+    with settings(sudo_prefix=sprefix), fabric.context_managers.show("debug"):
+        if None != conf['pre_process']:
+            run_remote(conf['pre_process'], conf['sudo'])
+            
+        result = put(local_path=pack_name, 
+                    remote_path="/tmp", 
+                    use_sudo=False, 
+                    mirror_local_mode=False)
+        if (len(result.failed) > 0):
+            for i in result.failed:
+                print "transfer failed: %s"%(i)
 
+        run_remote("mkdir -p %s"%(conf['remote_dir']), conf['sudo'])
+        run_remote("tar -xzf /tmp/%s -C %s"%(pack_name, conf['remote_dir']), conf['sudo'])
+        #delete tmp file
+        run("rm /tmp/%s"%(pack_name))
+    
+        if None != conf['post_process']:
+            run_remote(conf['post_process'], conf['sudo'])
+    
 def config_get(conf, section, option, default):
-    if conf.has_option(section, option):
-        return conf.get(section, option)
+    if conf.has_section(section) and conf.has_option(section, option):
+        if type(default) == bool:
+            return "yes" == conf.get(section, option) or "true" == conf.get(section, option)
+        else:
+            return conf.get(section, option)
     else:
         return default
         
 def load_deploy_conf(conf_file):
-    remote_dir = "~"
+    remote_dir = ""
     post_process = None
     pre_process = None
-    conf_reader = SafeConfigParser({'password':None, 'user':None, 'remote_dir':None, 'post_process':None})
+    conf_reader = SafeConfigParser()
     try:
         conf_reader.read(conf_file)
     except Exception, e:
         sys.stderr.write("read(%s) failed, err:%s\n"%(conf_file, str(e)))
-        return None
+        return
     # check def conf
-    if conf_reader.has_section('_def'):
-        def_pwd = config_get(conf_reader, "_def", "password", "")
-        def_usr = config_get(conf_reader, "_def", "user", "root")
-        remote_dir = config_get(conf_reader, "_def", "remote_dir", "/tmp")
-        post_process = config_get(conf_reader, "_def", "post_process", None)
-        pre_process = config_get(conf_reader, "_def", "pre_process", None)
-        env.password = def_pwd
-        env.user = def_usr
-    else:
-        env.password = None
-        env.user = None
-    
-    env.hosts = []
-    env.passwords.clear()
+    def_pwd = config_get(conf_reader, "_def", "password", "")
+    remote_dir = config_get(conf_reader, "_def", "remote_dir", "")
+    post_process = config_get(conf_reader, "_def", "post_process", None)
+    pre_process = config_get(conf_reader, "_def", "pre_process", None)
     
     for host in conf_reader.sections():
         if host.startswith('_'):
             continue
-        
-        host_pwd = conf_reader.get(host, "password")
-        env.hosts.append(host)
-        if None != host_pwd:
-            env.passwords[host] = host_pwd
-
-    return {'remote_dir':remote_dir, 'post_process':post_process, 'pre_process': pre_process}
+            
+        yield {
+            'host': config_get(conf_reader, host, "host", host),
+            'password': config_get(conf_reader, host, "password", def_pwd), 
+            'remote_dir': config_get(conf_reader, host, "remote_dir", remote_dir), 
+            'post_process': config_get(conf_reader, host, "post_process", post_process), 
+            'pre_process': config_get(conf_reader, host, "pre_process", pre_process), 
+            'sudo': config_get(conf_reader, host, "sudo", False), 
+            'sudo_prefix': config_get(conf_reader, host, "sudo_prefix", None), 
+        }
     
 def deploy(deploy_name = None):
     rootpath = "."
@@ -81,15 +89,21 @@ def deploy(deploy_name = None):
             if (rootpath != root or dir.startswith('_')):
                 continue
             
-            deploy_path = dir
-            conf = load_deploy_conf(os.sep.join([deploy_path, "_conf"]))
-            if None == conf:
-                sys.stderr.write("load conf err under %s"%(deploy_path))
-                continue
+            #prepare local pack
+            print "now deploy directory %s ..."%(dir)
+            pack_name = "_deploy.tar.gz"
+            with lcd(dir):
+                local("tar -czf ../%s --exclude=_conf *"%(pack_name))
             
-            for host_str in env.hosts:
-                env.host_string = host_str
-                deploy_dir(deploy_path, conf)
+            for deploy_conf in load_deploy_conf(os.sep.join([dir, "_conf"])):
+                env.hosts = []
+                env.hosts.append(deploy_conf['host'])
+                env.password = deploy_conf['password']
+                #host_string Defines the current user/host/port which Fabric will connect to when executing run, put and so forth.
+                env.host_string = deploy_conf['host']
+                deploy_dir(dir, deploy_conf, pack_name)
+                
+            local("rm ./%s"%(pack_name));
             
 if __name__ == '__main__':
     deploy_name = None
