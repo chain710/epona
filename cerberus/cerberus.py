@@ -5,55 +5,77 @@ from os.path import join,getsize,getmtime
 import re,time
 import argparse
 import logging
+import gzip
 
 class conf_item:
     path=''
     file_pat=''
     oldest=0
     limit=0
+    method='rm'
+    
+def proc_single_file(method, path):
+    if 'gzip' == method:
+        gzip_path = '%s.gz'%(path)
+        f_in = open(path, 'rb')
+        f_out = gzip.open(gzip_path, 'wb')
+        f_out.writelines(f_in)
+        f_out.close()
+        f_in.close()
+        os.remove(path)
+    elif 'rm' == method:
+        os.remove(path)
+    else:
+        logging.error("unknown method %s for file %s"%(method, path))
 
 def narrow_dir(conf, dry_run):
-    dir_size, flist = get_dir_childs(conf.path)
+    dir_size, flist = get_dir_childs(conf.path, conf.file_pat)
 
     rm_list = []
     flist.sort(key=lambda f: f['mtime'], reverse=False)
     if (dir_size > conf.limit):
         for f in flist:
-            if (not fnmatch.fnmatch(f['name'], conf.file_pat)):
-                continue
             dir_size -= f['size']
             rm_list.append(f)
-            f['_removed']=True
+            logging.debug("size too large(dir=%d, file=%d), %s %s"%(dir_size, f['size'], conf.method, f['path']))
+            f['_proc']=True
             if not dry_run:
-                os.remove(f['path'])
+                proc_single_file(conf.method, f['path'])
                 
             if (dir_size <= conf.limit):
                 break
 
-    #delete expired anyway
+    #proc expired anyway
     nowtime = time.time()
     for f in flist:
-        if (not fnmatch.fnmatch(f['name'], conf.file_pat) or f['_removed']):
+        if (not fnmatch.fnmatch(f['name'], conf.file_pat) or f['_proc']):
             continue
         if (nowtime - f['mtime'] < conf.oldest):
             break
             
+        logging.debug("file too old, %s %s"%(conf.method, f['path']))
         dir_size -= f['size']
         rm_list.append(f)
         if not dry_run:
-            os.remove(f['path'])
+            proc_single_file(conf.method, f['path'])
             
     return rm_list, dir_size
 
-def get_dir_childs(dirname):
+def get_dir_childs(dirname, file_pat):
     size = 0L
     flist = []
+    # we dont want rm / -rf, do we?
+    if '/'==dirname:
+        return 0, []
+        
     for root,dirs,files in os.walk(dirname):
         for name in files:
             fpath = join(root, name)
+            if (not fnmatch.fnmatch(name, file_pat)):
+                continue
             fsize = getsize(fpath)
             size += fsize
-            flist.append({'path':fpath, 'mtime':int(getmtime(fpath)), 'size':fsize, 'name':name, '_removed':False})
+            flist.append({'path':fpath, 'mtime':int(getmtime(fpath)), 'size':fsize, 'name':name, '_proc':False})
     return size, flist
 
 if __name__ == '__main__':
@@ -63,7 +85,7 @@ if __name__ == '__main__':
     procname = os.path.basename(sys.argv[0])
     logging.basicConfig(format='%(asctime)s|%(message)s', filename='%s%s%s.log'%(my_dir, os.sep, os.path.splitext(procname)[0]), level=logging.DEBUG, datefmt='%Y-%m-%d %H:%M:%S')
     
-    parser = argparse.ArgumentParser(description='watch dir, delete expired files if size exceeds.')
+    parser = argparse.ArgumentParser(description='watch dir, proc(rm/gzip) expired files if size exceeds.')
     parser.add_argument('--dryrun', dest='dry_run', metavar='1/0', type=int, help='dryrun only(1=yes,0=no)', default=1)
     parser.add_argument('-f', dest='conf', metavar='filename', type=str, help='specify config file path', default=None)
     args = parser.parse_args()
@@ -71,7 +93,7 @@ if __name__ == '__main__':
     if None == args.conf:
         args.conf = "%s%s%s.conf"%(my_dir, os.sep, os.path.splitext(procname)[0])
         
-    conf_pat = re.compile(r'([^#\s]+)\s+([^\s]+)\s+(\d+)(day|hour)\s+(\d+)(k|m|g)', re.IGNORECASE)
+    conf_pat = re.compile(r'([^#\s]+)\s+([^\s]+)\s+(\d+)(day|hour)\s+(\d+)(k|m|g)\s+(gzip|rm)', re.IGNORECASE)
     for line in open(args.conf):
         match = conf_pat.search(line)
         if None == match:
@@ -82,8 +104,8 @@ if __name__ == '__main__':
         tmp.file_pat = match.group(2)
         tmp.oldest = int(match.group(3)) * oldest_r[match.group(4).lower()]
         tmp.limit = int(match.group(5)) * limit_r[match.group(6).lower()]
+        tmp.method = match.group(7).lower()
+        
         rm_list, final_size = narrow_dir(tmp, dry_run=args.dry_run>0)
-        print("%d files deleted"%(len(rm_list)))
-        logging.info("delete(dryrun=%d) %d files under %s, final size is %d"%(args.dry_run, len(rm_list), tmp.path, final_size))
-        for f in rm_list:
-            logging.debug("%s deleted"%(f['path']))
+        logging.info("%s %d files"%(tmp.method, len(rm_list)))
+        logging.info("%s (dryrun=%d) %d files under %s, final size is %d"%(tmp.method, args.dry_run, len(rm_list), tmp.path, final_size))
