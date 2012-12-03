@@ -61,11 +61,16 @@ def narrow_dir(conf, dry_run):
             
     return rm_list, dir_size
 
+def is_dangerous_dir(dirname):
+    dirname = dirname.rstrip("/")
+    return "" == dirname or "/usr" == dirname or "/usr/local" == dirname or "/var" == dirname
+    
 def get_dir_childs(dirname, file_pat):
     size = 0L
     flist = []
     # we dont want rm / -rf, do we?
-    if '/'==dirname:
+    if is_dangerous_dir(dirname):
+        logging.error("dir %s too dangerous, maybe you want to delete it manually?"%(dirname))
         return 0, []
         
     for root,dirs,files in os.walk(dirname):
