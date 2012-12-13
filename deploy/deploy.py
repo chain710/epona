@@ -8,6 +8,8 @@ from fabric.api import local, run, env, put, sudo, lcd, cd
 from fabric.contrib.project import upload_project
 from fabric.context_managers import settings
 from ConfigParser import SafeConfigParser
+import logging
+import random
 
 def run_remote(cmdline, use_sudo):
     if use_sudo:
@@ -29,7 +31,7 @@ def deploy_dir(local_dir, conf, pack_name):
                     mirror_local_mode=False)
         if (len(result.failed) > 0):
             for i in result.failed:
-                print "transfer failed: %s"%(i)
+                logging.error( "transfer failed: %s"%(i) )
 
         run_remote("mkdir -p %s"%(conf['remote_dir']), conf['sudo'])
         run_remote("tar -xzf /tmp/%s -C %s"%(pack_name, conf['remote_dir']), conf['sudo'])
@@ -77,9 +79,30 @@ def load_deploy_conf(conf_file):
             'sudo': config_get(conf_reader, host, "sudo", False), 
             'sudo_prefix': config_get(conf_reader, host, "sudo_prefix", None), 
         }
+        
+def clean_deploy(deploy_name):
+    if None == deploy_name:
+        return
+    rootpath = "."
+    for root,dirs,files in os.walk(rootpath):
+        for dir in dirs:
+            # process file under root only
+            if (dir != deploy_name):
+                continue
+            
+            if (rootpath != root or dir.startswith('_')):
+                continue
+            
+            logging.info( "now cleanup %s ..."%(dir) )
+            with lcd(dir):
+                tmp_conf_path = "/tmp/tmp_deploy_conf_%s_%d"%(datetime.now().strftime("%Y%m%d%H%M%S"), random.randint(0,1000))
+                local("mv ./_conf %s"%(tmp_conf_path))
+                local("rm * -rf")
+                local("mv %s ./_conf"%(tmp_conf_path))
     
 def deploy(deploy_name = None):
     rootpath = "."
+    deploynum = 0
     for root,dirs,files in os.walk(rootpath):
         for dir in dirs:
             # process file under root only
@@ -90,7 +113,7 @@ def deploy(deploy_name = None):
                 continue
             
             #prepare local pack
-            print "now deploy directory %s ..."%(dir)
+            logging.info( "now deploy directory %s ..."%(dir) )
             pack_name = "_deploy.tar.gz"
             with lcd(dir):
                 local("tar -czf ../%s --exclude=_conf *"%(pack_name))
@@ -104,8 +127,15 @@ def deploy(deploy_name = None):
                 deploy_dir(dir, deploy_conf, pack_name)
                 
             local("rm ./%s"%(pack_name));
+            deploynum = deploynum + 1
+    
+    return deploynum
             
 if __name__ == '__main__':
+    my_dir = os.path.dirname(os.path.abspath(__file__))
+    procname = os.path.basename(sys.argv[0])
+    logging.basicConfig(format='%(asctime)s|%(message)s', filename='%s%s%s.log'%(my_dir, os.sep, os.path.splitext(procname)[0]), level=logging.DEBUG, datefmt='%Y-%m-%d %H:%M:%S')
+    
     deploy_name = None
     if (len(sys.argv) > 1):
         deploy_name = sys.argv[1]
