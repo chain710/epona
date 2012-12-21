@@ -80,10 +80,15 @@ def load_deploy_conf(conf_file):
             'sudo_prefix': config_get(conf_reader, host, "sudo_prefix", None), 
         }
         
-def clean_deploy(deploy_name):
+def clean_deploy(deploy_name, deploy_root = None):
     if None == deploy_name:
         return
-    rootpath = "."
+        
+    if None != deploy_root:
+        rootpath = deploy_root
+    else:
+        rootpath = os.path.dirname(os.path.abspath(__file__))
+
     for root,dirs,files in os.walk(rootpath):
         for dir in dirs:
             # process file under root only
@@ -100,8 +105,11 @@ def clean_deploy(deploy_name):
                 local("rm * -rf")
                 local("mv %s ./_conf"%(tmp_conf_path))
     
-def deploy(deploy_name = None):
-    rootpath = "."
+def deploy(deploy_name = None, deploy_root = None):
+    if None != deploy_root:
+        rootpath = deploy_root
+    else:
+        rootpath = os.path.dirname(os.path.abspath(__file__))
     deploynum = 0
     for root,dirs,files in os.walk(rootpath):
         for dir in dirs:
@@ -134,7 +142,7 @@ def deploy(deploy_name = None):
 if __name__ == '__main__':
     my_dir = os.path.dirname(os.path.abspath(__file__))
     procname = os.path.basename(sys.argv[0])
-    logging.basicConfig(format='%(asctime)s|%(message)s', filename='%s%s%s.log'%(my_dir, os.sep, os.path.splitext(procname)[0]), level=logging.DEBUG, datefmt='%Y-%m-%d %H:%M:%S')
+    logging.basicConfig(format='%(asctime)s|%(message)s', filename=os.path.join(my_dir, os.path.splitext(procname)[0]+".log"), level=logging.DEBUG, datefmt='%Y-%m-%d %H:%M:%S')
     
     deploy_name = None
     if (len(sys.argv) > 1):
