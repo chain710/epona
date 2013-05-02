@@ -1,38 +1,62 @@
+#!/usr/bin/env python
+#coding=utf-8
 from openpyxl import load_workbook
 import os, fnmatch
 import codecs
 from sets import Set
+import argparse
+import logging
+import hashlib
 
-class format_conf:
+class src_format:
+    line = 1
+    inf = 2
+    
+class dst_format:
+    ini = 1
+    xml = 2
+
+class output_config:
     def __init__(self):
-        self.type = "line"
-        self.out_confs = {}
-    
-def load_format_conf(sheet):
-    ret = format_conf()
-    for cells in sheet.rows:
-        if cells[0].value == 'type':
-            ret.type = cells[1].value
-        elif cells[0].value.startswith('outconf_') and cells[1].value != None:
-            ret.out_confs[cells[0].value.split('_', 1)[1]] = cells[1].value
-    return ret
-
-def node_desc(name):
-    return unicode(name).split('.', 1)[0]
-    
-    
-def is_conf_node(name, fcode):
-    opts = name.split('.')
-    has_out_spec = False
-    for i in opts:
-        if 'o_%s'%(fcode) == i:
-            return True
-        if i.startswith('o_'):
-            has_out_spec = True
-            
-    return not has_out_spec
+        self.type = src_format.line
+        #output_name=>file_name
+        self.outputs = {}
         
-def cell_value(c):
+    def from_sheet(self, sheet):
+        for cells in sheet.rows:
+            k = cells[0].value
+            v = cells[1].value
+            if k == 'type':
+                if v == "line":
+                    self.type = src_format.line
+                elif v == "inf":
+                    self.type = src_format.inf
+                else:
+                    logging.error("unknown source format %s"%(v))
+                
+            elif k.startswith('outconf_'):
+                self.outputs[k.split('_', 1)[1]] = cells[1].value
+            else:
+                logging.error("unknown output config key %s"%(k))
+
+class field_descriptor:
+    def __init__(self, desc):
+        metas = unicode(desc).split('.')
+        #field name
+        self.name = metas[0]
+        #output names
+        self.outputs = Set([k.split("_", 1)[1] for k in metas[1:] if k.startswith('o_')])
+        
+    def is_suppressed(self, outputs):
+        if 0 == len(self.outputs):
+            return False
+        
+        for k in outputs:
+            if k in self.outputs:
+                return False
+        return True
+        
+def cell_to_string(c):
     if (c.is_date()):
         return c.value.strftime("%Y-%m-%d_%H:%M:%S")
     else:
@@ -40,121 +64,189 @@ def cell_value(c):
         
 def xml_entry(c, d):
     return u"<%s>%s</%s>"%(d, c, d)
+
+def line_data_from_sheet(output_name, sheet, data):
+    add_comment = False
+    if not isinstance(data, list):
+        data = []
+        add_comment = True
+    rows = sheet.rows
+    field_desc = [field_descriptor(f.value) for f in rows[0]]
+    field_idx = [i for i in range(0, len(field_desc)) if not field_desc[i].is_suppressed([output_name])]
+    if add_comment:
+        #注释
+        data.append([field_desc[i].name for i in field_idx])
+    for r in rows[1:]:
+        data.append([cell_to_string(r[i]) for i in field_idx])
         
-def to_xml_row_str(desc, row, fcode, col_masks):
-    return "<%s>\n%s\n</%s>"%(
-        'man', 
-        '\n'.join([xml_entry(cell_value(row[i]), node_desc(desc[i].value)) 
-            for i in range(0,len(row)) if node_desc(desc[i].value) in col_masks and is_conf_node(desc[i].value, fcode)]), 
-        'man')
-
-def to_ini_row_str(desc, row, fcode, col_masks):
-    return '  '.join([cell_value(row[i]) for i in range(0,len(row)) if node_desc(desc[i].value) in col_masks and is_conf_node(desc[i].value, fcode)])
+    return data
     
-def save_conf_file(filename, data):
-    f = codecs.open(filename, "w", "utf-8")
-    f.write(data)
-    f.close()
-
-def ini_description(desc, fcode):
-    return '#'+'  '.join([node_desc(i.value) for i in desc if is_conf_node(i.value, fcode)])
-
-def inf_to_ini(rows, fcode):
-    inf_str = ''
+def inf_data_from_sheet(output_name, sheet, data):
+    if not isinstance(data, dict):
+        data = {}
+    rows = sheet.rows
+    section = "_"
+    skip_mode = False
     for row in rows:
         if len(row) < 2:
             continue
-        k = cell_value(row[0])
-        v = cell_value(row[1])
-        
+        fdesc = field_descriptor(row[0].value)
         if row[1].value == None:
-            inf_str += "[%s]\n"%(k)
-        elif is_conf_node(k, fcode):
-            inf_str += "%s=%s\n"%(node_desc(k), v)
-    return inf_str
-    
-def inf_to_xml(rows, fcode):
-    inf_str = ''
-    last_sec = None
-    for row in rows:
-        if len(row) < 2:
+            section = fdesc.name
+            if fdesc.is_suppressed([output_name]):
+                skip_mode = True
+            else:
+                skip_mode = False
+                
             continue
-        k = cell_value(row[0])
-        v = cell_value(row[1])
+        elif skip_mode or fdesc.is_suppressed([output_name]):
+            continue
         
-        if row[1].value == None:
-            if None == last_sec:
-                inf_str += "<%s>\n"%(k)
-            elif is_conf_node(k, fcode):
-                inf_str += "</%s>\n<%s>\n"%(last_sec, k)
-            last_sec = k
-        elif is_conf_node(k, fcode):
-            inf_str += "<%s>%s</%s>\n"%(node_desc(k), v, node_desc(k))
-    if last_sec != None:
-        inf_str += "</%s>\n"%(last_sec)
-    return inf_str
-    
-def generate_conf_text(file_ext, conf_type, fcode, rows, col_masks):
-    if file_ext == ".xml":
-        if conf_type == "inf":
-            xmlout = inf_to_xml(rows, fcode)
+        v = cell_to_string(row[1])
+        if data.has_key(section):
+            data[section].update({fdesc.name:v})
         else:
-            xmlout = "%s\n"%('\n'.join([to_xml_row_str(rows[0], i, fcode, col_masks) for i in rows[1:]]))
-        return xmlout
-    elif file_ext == ".ini":
-        if conf_type == "inf":
-            iniout = inf_to_ini(rows, fcode)
-        else:
-            iniout = "%s\n"%('\n'.join([to_ini_row_str(rows[0], i, fcode, col_masks) for i in rows[1:]]))
-        #output_ini(confname, iniout)
-        return iniout
-    else:
-        print "unknown file ext %s"%(file_ext)
-        return ""
-
-def format_one_conf(filename):
-    wb = load_workbook(filename = filename)
-    fconf = None
-    print "now process xlsx file %s"%(filename)
-    fconf = load_format_conf(wb.get_sheet_by_name("_conf"))
-    col_masks = None
-    def_sheet = None
-    if fconf.type == "line":
-        # get default sheet
-        def_sheet = wb.get_sheet_by_name("_output")
-        col_masks = Set([node_desc(i.value) for i in def_sheet.rows[0]])
+            data.update({section: {fdesc.name:v}})
+    return data
     
-    outconf_content = {}
-    for i in wb.get_sheet_names():
-        sheet = wb.get_sheet_by_name(i)
-        if i.startswith("_output"):
-            for fcode in fconf.out_confs:
-                confname = fconf.out_confs[fcode]
-                file_ext = os.path.splitext(confname)[1]
-                if not outconf_content.has_key(confname):
-                    outconf_content[confname] = ""
-                outconf_content[confname] += generate_conf_text(file_ext, fconf.type, fcode, sheet.rows, col_masks)
+def line_data_to_xml(data):
+    field_desc = data[0]
+    content = ''
+    for row in data[1:]:
+        content += "\n<man>\n"
+        for i in range(0, len(field_desc)):
+            content += xml_entry(row[i], field_desc[i])
+        content += "\n</man>\n"
+    return u"<?xml version='1.0' encoding='UTF-8' standalone='yes'?><conf>%s</conf>\n"%(content)
+    
+def line_data_to_ini(data):
+    field_desc = data[0]
+    content = '#'+' '.join(field_desc)+'\n'
+    for row in data[1:]:
+        content += ' '.join(row) + '\n'
+    return content
 
-    for fcode in fconf.out_confs:
-        confname = fconf.out_confs[fcode]
-        file_ext = os.path.splitext(confname)[1]
+def inf_data_to_xml_seg(data):
+    content = ''
+    for k in data:
+        v = data[k]
+        if isinstance(v, dict):
+            content += xml_entry(inf_data_to_xml_seg(v), k)
+        else:
+            content += xml_entry(v, k)
+    return content
+    
+def inf_data_to_xml(data):
+    return u"<?xml version='1.0' encoding='UTF-8' standalone='yes'?><conf>%s</conf>\n"%(inf_data_to_xml_seg(data))
+    
+def inf_data_to_ini(data):
+    content = ''
+    for k in data:
+        v = data[k]
+        if isinstance(v, dict):
+            content += "[%s]\n"%(k)
+            content += inf_data_to_ini(v)
+        else:
+            content += "%s=%s\n"%(k, v)
+    return content
+            
+def write_data_to_file(type, data, filename):
+    file_ext = os.path.splitext(filename)[1]
+    
+    file_content = ''
+    if type == src_format.line:
         if file_ext == ".xml":
-            outconf_content[confname] = u"<?xml version='1.0' encoding='UTF-8' standalone='yes'?><conf>\n%s\n</conf>\n"%(outconf_content[confname])
-        elif file_ext == ".ini" and fconf.type == "line":
-            outconf_content[confname] = u"%s\n%s"%(ini_description(def_sheet.rows[0], fcode), outconf_content[confname])
-        save_conf_file(confname, outconf_content[confname])
+            file_content = line_data_to_xml(data)
+        elif file_ext == ".ini":
+            file_content = line_data_to_ini(data)
+        else:
+            logging.error("unknown file ext %s", file_ext)
+            return False
+    elif type == src_format.inf:
+        if file_ext == ".xml":
+            file_content = inf_data_to_xml(data)
+        elif file_ext == ".ini":
+            file_content = inf_data_to_ini(data)
+        else:
+            logging.error("unknown file ext %s", file_ext)
+            return False
+    else:
+        logging.error("unknown source format %d"%(type))
+        return False
+        
+    f = codecs.open(filename, "w", "utf-8")
+    f.write(file_content)
+    f.close()
+    return True
+    
+def format_one_file(filename, output_path):
+    if not os.path.isdir(output_path):
+        logging.error("dst path must be directory!")
+        return False
+    try:
+        wb = load_workbook(filename = filename)
+    except Exception as e:
+        logging.error("can not load workbook %s"%(filename))
+        return False
+    logging.info("now process file %s"%(filename))
+    fconf = output_config()
+    fconf.from_sheet(wb.get_sheet_by_name("_conf"))
+    output_sheets = [wb.get_sheet_by_name(i) for i in wb.get_sheet_names() if i.startswith("_output")]
 
-if __name__ == '__main__':
-    rootpath = "."
+    for i in fconf.outputs:
+        output_file = fconf.outputs[i]
+        if src_format.line == fconf.type:
+            #check output fields on each output name
+            expect_flds = None
+            for sheet in output_sheets:
+                flds = [d.name for d in [field_descriptor(f.value) for f in sheet.rows[0]] if not d.is_suppressed([i])]
+                if None == expect_flds:
+                    expect_flds = flds
+                elif expect_flds != flds:
+                    logging.error("unmatch field description for output %s in sheet %s"%(i, sheet.title))
+                    return False
+
+        data = None
+        for sheet in output_sheets:
+            if src_format.line == fconf.type:
+                data = line_data_from_sheet(i, sheet, data)
+            elif src_format.inf == fconf.type:
+                data = inf_data_from_sheet(i, sheet, data)
+            else:
+                logging.error("unknown source format %d", fconf.type)
+                return False
+        write_data_to_file(fconf.type, data, os.sep.join([output_path, output_file]))
+    return True
+
+def format_one_dir(dirpath, output_path):
+    if not os.path.isdir(output_path):
+        logging.error("dst path must be directory!")
+        return
     excel_pat = "*.xlsx"
-    for root,dirs,files in os.walk(rootpath):
+    for root,dirs,files in os.walk(dirpath):
         for filespath in files:
-            # process file under root only
-            if (rootpath != root):
+            # only files that directly under dirpath
+            if (dirpath != root):
                 continue
             
             if (not fnmatch.fnmatch(filespath, excel_pat)):
                 continue
                 
             fullname = os.path.join(root, filespath)
-            format_one_conf(fullname)
+            format_one_file(fullname, output_path)
+            
+if __name__ == '__main__':
+    logging.basicConfig(format='%(asctime)s|%(message)s', level=logging.DEBUG, datefmt='%Y-%m-%d %H:%M:%S')
+    
+    parser = argparse.ArgumentParser(description='convert microsoft xlsx files to unicode ini/xml.')
+    parser.add_argument('--src', dest='src_path', action='store', default=".", help='specify target dir/file')
+    parser.add_argument('--dst', dest='dst_path', action='store', default=".", help='specify output dir/file')
+    args = parser.parse_args()
+    
+    rootpath = args.src_path
+    if os.path.isdir(args.src_path):
+        format_one_dir(args.src_path, args.dst_path)
+    elif os.path.isfile(args.src_path):
+        format_one_file(args.src_path, args.dst_path)
+    else:
+        logging.error("sorry, but i dont know wtf it is :(")
